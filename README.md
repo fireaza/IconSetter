@@ -15,6 +15,7 @@
 - Can automatically generate .ico files from image files
 - Optionally randomizes icons when multiple are available
 - New icons appear right away, no need to restart Explorer
+- Respects existing desktop.ini files, if you're using a custom desktop.ini file for say, giving a custom name to a folder, this will be kept!
 - Fast and lightweight
 - Portable, all-in-one EXE
 - Open source
