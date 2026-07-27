@@ -1,0 +1,406 @@
+<Window x:Class="IconSetter.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Icon Setter"
+        Width="1280"
+        Height="720"
+        MinWidth="720"
+        MinHeight="560"
+        WindowStartupLocation="CenterScreen"
+        AllowDrop="True"
+        Drop="Window_Drop"
+        DragOver="Window_DragOver">
+
+    <Grid Margin="20">
+
+        <!-- ===================== Content (workflow panels) ===================== -->
+        <Grid>
+
+            <!-- Main screen: folder picker + gallery -->
+            <Grid x:Name="previewPanel" Visibility="Visible">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0">
+                    <!-- Folder picker -->
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="txtRoot" Grid.Column="0" Height="38" FontSize="13" Margin="0,0,10,0"
+                                 ToolTip="Type a path, or drag a folder anywhere onto this window. Press Enter to scan."
+                                 KeyDown="txtRoot_KeyDown"/>
+                        <Button x:Name="btnRecentFolders" Grid.Column="1" Style="{StaticResource SecondaryButtonStyle}"
+                                Width="44" Height="38" FontSize="13" Margin="0,0,10,0" Click="btnRecentFolders_Click"
+                                ToolTip="Recently scanned folders">
+                            <StackPanel Orientation="Horizontal">
+                                <Image Source="/Assets/icon_recent.png" Width="16" Height="16"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <TextBlock Text="▾" Margin="3,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <Button.ContextMenu>
+                                <ContextMenu x:Name="cmRecentFolders" Placement="Bottom"/>
+                            </Button.ContextMenu>
+                        </Button>
+                        <Button x:Name="btnBrowse" Grid.Column="2" Content="Browse…" Style="{StaticResource SecondaryButtonStyle}"
+                                Width="140" Height="38" FontSize="13" Margin="0,0,10,0" Click="btnBrowse_Click"/>
+                        <Button x:Name="btnScan" Grid.Column="3" Style="{StaticResource PrimaryButtonStyle}"
+                                Width="140" Height="38" FontSize="13" Click="btnScan_Click"
+                                ToolTip="Scans the folder above (and its subfolders, unless 'Only this folder' is checked) and converts/enriches icons per the current Options.">
+                            <StackPanel Orientation="Horizontal">
+                                <Image Source="/Assets/icon_search.png" Width="16" Height="16" Margin="0,0,6,0"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <TextBlock Text="Scan" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid Grid.Column="0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <WrapPanel Grid.Column="0" VerticalAlignment="Center">
+                                <CheckBox x:Name="chkSingleFolder" Content="Only this folder"
+                                          VerticalAlignment="Center" FontSize="12" Margin="0,0,20,6"/>
+                                <CheckBox x:Name="chipWithIco" Content="Has .ico (0)" Tag="WithIco"
+                                          Style="{StaticResource ToggleChipStyle}" Margin="0,0,8,6"
+                                          Checked="CategoryChip_Changed" Unchecked="CategoryChip_Changed"
+                                          ToolTip="Folders that already have a .ico icon file."/>
+                                <CheckBox x:Name="chipWithNonIco" Content="Has &quot;icon&quot; image (0)" Tag="WithNonIco"
+                                          Style="{StaticResource ToggleChipStyle}" Margin="0,0,8,6"
+                                          Checked="CategoryChip_Changed" Unchecked="CategoryChip_Changed"
+                                          ToolTip="Folders with an image (icon.png etc.) that hasn't been converted to .ico yet."/>
+                                <CheckBox x:Name="chipWithBoth" Content="Has both (0)" Tag="WithBoth"
+                                          Style="{StaticResource ToggleChipStyle}" Margin="0,0,8,6"
+                                          Checked="CategoryChip_Changed" Unchecked="CategoryChip_Changed"
+                                          ToolTip="Folders with both a .ico and an unconverted source image."/>
+                                <CheckBox x:Name="chipWithoutIcon" Content="No .ico (0)" Tag="WithoutIcon"
+                                          Style="{StaticResource ToggleChipStyle}" Margin="0,0,8,6"
+                                          Checked="CategoryChip_Changed" Unchecked="CategoryChip_Changed"
+                                          ToolTip="Folders with no icon image at all."/>
+                                <CheckBox x:Name="chipMultipleIcons" Content="Has multiple .ico (0)"
+                                          Style="{StaticResource ToggleChipStyle}" Margin="0,0,8,6"
+                                          Checked="ChkMultipleIconsFilter_Changed" Unchecked="ChkMultipleIconsFilter_Changed"
+                                          ToolTip="Folders with more than one .ico candidate - the app had to pick one for you (see Options for how). Combines with the other filters rather than replacing them."/>
+                            </WrapPanel>
+                            <TextBlock x:Name="txtPreviewCount" Grid.Column="1" VerticalAlignment="Center"
+                                       HorizontalAlignment="Right" Margin="10,0,10,0" Foreground="{StaticResource TextSecondaryBrush}"
+                                       ToolTip="How many folders Apply will actually change - the full scanned set, regardless of the current filter, search, or view."/>
+                        </Grid>
+                        <Grid Grid.Column="1" Width="290" HorizontalAlignment="Left">
+                            <TextBox x:Name="txtSearch" Height="38" VerticalAlignment="Center"
+                                     ToolTip="Filter by folder name" TextChanged="txtSearch_TextChanged"
+                                     GotFocus="TxtSearch_GotFocus" LostFocus="TxtSearch_LostFocus"/>
+                            <StackPanel x:Name="txtSearchPlaceholder" Orientation="Horizontal" IsHitTestVisible="False"
+                                        VerticalAlignment="Center" Margin="10,0,0,0">
+                                <Image Source="/Assets/icon_search.png" Width="14" Height="14" Margin="0,0,6,0"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <TextBlock Text="Search folders…" Foreground="{StaticResource TextSecondaryBrush}"/>
+                            </StackPanel>
+                        </Grid>
+                    </Grid>
+
+                    <Grid x:Name="breadcrumbRow" Margin="0,0,0,8" Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="btnUpLevel" Grid.Column="0" Content="⬆ Up" Style="{StaticResource SecondaryButtonStyle}"
+                                Width="70" Height="28" FontSize="11" Margin="0,0,10,0" Click="btnUpLevel_Click"/>
+                        <StackPanel x:Name="breadcrumbBar" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"/>
+                    </Grid>
+                </StackPanel>
+
+                <Border x:Name="galleryBackground" Grid.Row="1" Background="Transparent" CornerRadius="10">
+                    <Grid>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <ItemsControl x:Name="iconGallery">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel IsItemsHost="True"/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel HorizontalAlignment="Center" Margin="14,10">
+                                            <Grid Width="140" Height="140" Tag="{Binding}" MouseLeftButtonUp="FolderTile_Click">
+                                                <TextBlock Text="🗀" FontSize="72"
+                                                           Foreground="{Binding GallerySecondaryTextBrush, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                           Visibility="{Binding HasNoPreview, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                                <Image Source="{Binding PreviewImage}" Stretch="Uniform" Margin="2"
+                                                       ToolTip="{Binding DisplayName}"/>
+                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom" HorizontalAlignment="Center"
+                                                            Visibility="{Binding HasMultipleIcons, Converter={StaticResource BoolToVisibilityConverter}}"
+                                                            Margin="0,0,0,2">
+                                                    <Button Style="{StaticResource OverlayBtn}" Click="PrevIcon_Click" Tag="{Binding}" ToolTip="Previous icon">
+                                                        <Image Source="/Assets/btn_prev.png" Width="26" Height="26" Stretch="Uniform"/>
+                                                    </Button>
+                                                    <Button Style="{StaticResource OverlayBtn}" Click="Shuffle_Click" Tag="{Binding}" ToolTip="Pick a random icon">
+                                                        <Image Source="/Assets/btn_random.png" Width="26" Height="26" Stretch="Uniform"/>
+                                                    </Button>
+                                                    <Button Style="{StaticResource OverlayBtn}" Click="NextIcon_Click" Tag="{Binding}" ToolTip="Next icon">
+                                                        <Image Source="/Assets/btn_next.png" Width="26" Height="26" Stretch="Uniform"/>
+                                                    </Button>
+                                                </StackPanel>
+                                                <Border Visibility="{Binding HasSubfolders, Converter={StaticResource BoolToVisibilityConverter}}"
+                                                        Width="24" Height="24"
+                                                        HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,2,2,0"
+                                                        ToolTip="Contains subfolders — click to open">
+                                                    <Image Source="/Assets/badge_folder.png" Stretch="Uniform"/>
+                                                </Border>
+                                            </Grid>
+                                            <TextBlock Text="{Binding IconPositionText}" FontSize="10"
+                                                       Foreground="{Binding GallerySecondaryTextBrush, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                       HorizontalAlignment="Center" Margin="0,2,0,0"
+                                                       Visibility="{Binding HasMultipleIcons, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                            <TextBlock Text="{Binding DisplayName}" FontSize="12" Margin="0,3,0,0"
+                                                       Foreground="{Binding GalleryTextBrush, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                       TextAlignment="Center" TextWrapping="Wrap" MaxWidth="140" MaxHeight="34"
+                                                       TextTrimming="CharacterEllipsis" ToolTip="{Binding DisplayName}"/>
+                                            <TextBlock Text="{Binding IconState}" FontSize="10" FontWeight="SemiBold"
+                                                       HorizontalAlignment="Center" Margin="0,1,0,0"
+                                                       Foreground="{Binding IconStateBrush}"
+                                                       Visibility="{Binding ShowIconStateLabel, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+
+                        <TextBlock x:Name="txtGalleryEmpty" Visibility="Collapsed" IsHitTestVisible="False"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   TextAlignment="Center" TextWrapping="Wrap" MaxWidth="480" FontSize="13"
+                                   Foreground="{Binding GallerySecondaryTextBrush, RelativeSource={RelativeSource AncestorType=Window}}"/>
+                    </Grid>
+                </Border>
+
+                <Grid Grid.Row="2" Margin="0,14,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <WrapPanel Grid.Column="0" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,10,0">
+                            <RadioButton x:Name="rbShowAllFolders" Content="Show all folders" GroupName="viewMode"
+                                         Style="{StaticResource SegmentLeftStyle}" IsChecked="True"
+                                         Checked="ViewMode_Changed"
+                                         ToolTip="Every folder in the tree, all at once."/>
+                            <RadioButton x:Name="rbExplorerStyle" Content="Explorer style" GroupName="viewMode"
+                                         Style="{StaticResource SegmentRightStyle}"
+                                         Checked="ViewMode_Changed"
+                                         ToolTip="Browse one folder at a time, like Windows Explorer - folders with a folder badge can be opened."/>
+                        </StackPanel>
+                        <CheckBox x:Name="chkShowUpToDate" Content="Show up-to-date folders"
+                                  Style="{StaticResource SolidToggleChipStyle}" Margin="0,0,10,0"
+                                  Checked="ChkShowUpToDate_Changed" Unchecked="ChkShowUpToDate_Changed"
+                                  ToolTip="Off (default): only shows folders Apply will actually change. On: shows every folder, labeled New/Changed/Up to date. Folders with multiple icon choices always show either way."/>
+                        <Button x:Name="btnOptions" Style="{StaticResource SecondaryButtonStyle}"
+                                Padding="14,6" FontSize="12"
+                                Click="btnOptions_Click"
+                                ToolTip="Conversion settings and dark mode.">
+                            <StackPanel Orientation="Horizontal">
+                                <Image Source="/Assets/icon_options.png" Width="14" Height="14" Margin="0,0,6,0"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <TextBlock Text="Options" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                    </WrapPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button x:Name="btnForceRefresh"
+                                Content="⟳ Refresh Explorer"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                Width="140" Height="38" FontSize="12" Margin="0,0,10,0"
+                                Click="btnForceRefresh_Click"
+                                ToolTip="Only needed if a folder icon still won't update after Apply. This does a heavier system-wide refresh."/>
+                        <Button x:Name="btnRestartExplorer"
+                                Content="⟳ Restart Explorer"
+                                Style="{StaticResource DangerButtonStyle}"
+                                Width="140" Height="38" FontSize="12" Margin="0,0,10,0"
+                                Click="btnRestartExplorer_Click"
+                                ToolTip="Guarantees icons update, by closing and reopening Explorer entirely. Use this if Refresh Explorer didn't work."/>
+                        <Button x:Name="btnApply" Content="Apply" Style="{StaticResource SuccessButtonStyle}"
+                                Height="38" Width="150" FontSize="14" Click="btnApply_Click"
+                                ToolTip="Sets icons on every scanned folder that needs it — including any hidden by the current filter, search, or Explorer-style level."/>
+                    </StackPanel>
+                </Grid>
+            </Grid>
+
+            <!-- Step 3: Results -->
+            <Grid x:Name="resultsPanel" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0" Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="txtSummary" Text="Results" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="btnForceRefreshResults"
+                                Content="⟳ Refresh Explorer"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                Height="28" Padding="10,4" FontSize="11" Margin="0,0,8,0"
+                                Click="btnForceRefresh_Click"
+                                ToolTip="Only needed if a folder icon still won't update after Apply. This does a heavier system-wide refresh."/>
+                        <Button x:Name="btnRestartExplorerResults"
+                                Content="⟳ Restart Explorer"
+                                Style="{StaticResource DangerButtonStyle}"
+                                Height="28" Padding="10,4" FontSize="11"
+                                Click="btnRestartExplorer_Click"
+                                ToolTip="Guarantees icons update, by closing and reopening Explorer entirely. Use this if Refresh Explorer didn't work."/>
+                    </StackPanel>
+                </Grid>
+
+                <Border x:Name="delayNoticeBanner" Grid.Row="1" Visibility="Collapsed"
+                        Background="#1F3D6FBF" BorderBrush="#3D6FBF" BorderThickness="1"
+                        CornerRadius="8" Padding="12,10" Margin="0,0,0,12">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="ℹ" FontSize="15" Margin="0,0,10,0" VerticalAlignment="Top" Foreground="#3D6FBF"/>
+                        <TextBlock x:Name="txtDelayNotice" TextWrapping="Wrap" FontSize="12" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Border>
+
+                <ListView x:Name="lvResults" Grid.Row="2" BorderThickness="0" Background="Transparent"
+                          ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListView.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel IsItemsHost="True"/>
+                        </ItemsPanelTemplate>
+                    </ListView.ItemsPanel>
+                    <ListView.ItemContainerStyle>
+                        <Style TargetType="ListViewItem">
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="Margin" Value="0"/>
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="BorderThickness" Value="0"/>
+                            <Setter Property="Focusable" Value="False"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListViewItem">
+                                        <ContentPresenter/>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListView.ItemContainerStyle>
+                    <ListView.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush2}"
+                                    BorderThickness="1" CornerRadius="10" Padding="14" Margin="6" Width="168">
+                                <StackPanel HorizontalAlignment="Center">
+                                    <Border Width="76" Height="76">
+                                        <Image Source="{Binding PreviewImage}" Stretch="Uniform" Margin="2"/>
+                                    </Border>
+                                    <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" FontSize="13"
+                                               TextAlignment="Center" TextWrapping="Wrap" Margin="0,8,0,8"
+                                               MaxHeight="36" TextTrimming="CharacterEllipsis" ToolTip="{Binding DisplayName}"/>
+                                    <Border CornerRadius="10" Padding="10,4"
+                                            Background="{Binding Status, Converter={StaticResource StatusColorConverter}}">
+                                        <TextBlock Text="{Binding Status}" Foreground="White" FontSize="10" FontWeight="SemiBold"
+                                                   TextAlignment="Center" TextWrapping="Wrap"/>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+
+                <Grid Grid.Row="3" Margin="0,14,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal">
+                        <Button x:Name="btnBackFromResults" Content="← Back" Style="{StaticResource SecondaryButtonStyle}"
+                                Height="34" Width="90" Margin="0,0,10,0" Click="btnBackFromResults_Click"/>
+                        <Button x:Name="btnUndo" Content="Undo" Style="{StaticResource DangerButtonStyle}"
+                                Height="34" Width="90" Margin="0,0,10,0" Visibility="Collapsed" Click="btnUndo_Click"
+                                ToolTip="Undoes the changes just applied above, restoring each folder to exactly whatever it had before this Apply — a previous custom icon, or no icon at all. Only undoes this last batch."/>
+                        <Button x:Name="btnExportLog" Content="Export log…" Style="{StaticResource SecondaryButtonStyle}"
+                                Height="34" Width="110" Click="btnExportLog_Click"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <TextBlock x:Name="lblResultsCol1" Text="Applied:" FontWeight="Bold" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="txtApplied" Margin="0,0,20,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="Errors:" FontWeight="Bold" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="txtErrors" Margin="0,0,20,0" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="lblResultsCol3" Text="Skipped:" FontWeight="Bold" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="txtSkipped" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Grid>
+            </Grid>
+
+            <!-- Loading overlay -->
+            <Grid x:Name="loadingPanel" Background="#CC15161E" Visibility="Collapsed" Panel.ZIndex="99">
+                <Border Background="{StaticResource SurfaceBrush}" CornerRadius="14" Width="480"
+                        HorizontalAlignment="Center" VerticalAlignment="Center" Padding="28">
+                    <StackPanel>
+                        <Grid HorizontalAlignment="Center" Width="140" Height="140" Margin="0,0,0,16">
+                            <Ellipse x:Name="loadingSpinner" Width="56" Height="56" Stroke="{StaticResource AccentBrush}"
+                                     StrokeThickness="5" StrokeDashArray="6 3" RenderTransformOrigin="0.5,0.5">
+                                <Ellipse.RenderTransform>
+                                    <RotateTransform x:Name="spinnerRotate"/>
+                                </Ellipse.RenderTransform>
+                                <Ellipse.Triggers>
+                                    <EventTrigger RoutedEvent="Loaded">
+                                        <BeginStoryboard>
+                                            <Storyboard RepeatBehavior="Forever">
+                                                <DoubleAnimation Storyboard.TargetName="spinnerRotate"
+                                                                 Storyboard.TargetProperty="Angle"
+                                                                 From="0" To="360" Duration="0:0:1"/>
+                                            </Storyboard>
+                                        </BeginStoryboard>
+                                    </EventTrigger>
+                                </Ellipse.Triggers>
+                            </Ellipse>
+                            <Image x:Name="loadingCurrentIcon" Stretch="Uniform" Visibility="Collapsed"
+                                   RenderOptions.BitmapScalingMode="HighQuality"/>
+                        </Grid>
+
+                        <ProgressBar x:Name="loadingProgress" Height="10" Minimum="0" Maximum="100" Value="0" Margin="0,0,0,8"/>
+                        <TextBlock x:Name="loadingText" Text="Converting…" FontSize="14" HorizontalAlignment="Center"
+                                   Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,10"/>
+
+                        <StackPanel x:Name="warningContainer" Visibility="Collapsed" Margin="0,0,0,10">
+                            <TextBlock Text="⚠ This image is smaller than 256×256, so the icon may look soft:"
+                                       Foreground="{StaticResource WarningBrush}" FontWeight="SemiBold"
+                                       TextWrapping="Wrap" Margin="0,0,0,6"/>
+                            <TextBlock x:Name="loadingWarning" Foreground="{StaticResource TextSecondaryBrush}"
+                                       FontSize="12" TextWrapping="Wrap"/>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                            <Button x:Name="btnContinueToPreview" Content="Convert anyway" Width="130" Height="34"
+                                    Margin="0,0,10,0" Visibility="Collapsed" Style="{StaticResource PrimaryButtonStyle}"
+                                    Click="btnContinueToPreview_Click"/>
+                            <Button x:Name="btnSkipImage" Content="Skip this image" Width="130" Height="34"
+                                    Margin="0,0,10,0" Visibility="Collapsed" Style="{StaticResource SecondaryButtonStyle}"
+                                    Click="btnSkipImage_Click"/>
+                            <Button x:Name="btnCancelConversion" Content="Cancel" Width="90" Height="34"
+                                    Style="{StaticResource SecondaryButtonStyle}" Click="btnCancelConversion_Click"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+        </Grid>
+    </Grid>
+</Window>
