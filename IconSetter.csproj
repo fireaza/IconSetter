@@ -32,6 +32,7 @@
     <None Remove="Assets\icon_search.png" />
     <None Remove="Assets\icon_options.png" />
     <None Remove="Assets\icon_recent.png" />
+    <None Remove="Assets\icon_help.png" />
   </ItemGroup>
 
   <ItemGroup>
@@ -44,6 +45,7 @@
     <Resource Include="Assets\icon_search.png" />
     <Resource Include="Assets\icon_options.png" />
     <Resource Include="Assets\icon_recent.png" />
+    <Resource Include="Assets\icon_help.png" />
   </ItemGroup>
 
 </Project>

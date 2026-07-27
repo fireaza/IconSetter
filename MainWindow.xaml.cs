@@ -105,6 +105,12 @@ namespace IconSetter
             }
         }
 
+        private void btnHelp_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new HelpWindow { Owner = this };
+            dlg.ShowDialog();
+        }
+
         /// <summary>The full scanned set, keyed by folder path. This is what Apply always acts on -
         /// what's currently displayed in the gallery (FolderResults) is just a view onto this,
         /// either the whole thing (Show all folders) or one directory level (Explorer browsing).</summary>
