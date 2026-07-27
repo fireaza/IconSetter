@@ -55,7 +55,7 @@ dotnet publish -c Release
 
 ## How to Use
 
-1. Place an .ico file or image file named "icon" (you can add numbers to the end), inside the folders you want to customize.
+1. Place an .ico file or image file (supported formats are .png, .jpg, .jpeg and .bmp) that starts with "icon" (you can add whatever you like after), inside the folders you want to customize.
 2. Launch IconSetter.
 3. Select the parent folder.
 4. Click "Apply".
