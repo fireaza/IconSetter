@@ -360,16 +360,22 @@
 
             <!-- Loading overlay -->
             <Grid x:Name="loadingPanel" Background="#CC15161E" Visibility="Collapsed" Panel.ZIndex="99">
-                <Border Background="{StaticResource SurfaceBrush}" CornerRadius="14" Width="480"
+                <Border Background="{StaticResource SurfaceBrush}" CornerRadius="14" Width="700"
                         HorizontalAlignment="Center" VerticalAlignment="Center" Padding="28">
                     <StackPanel>
                         <Grid HorizontalAlignment="Center" Width="140" Height="140" Margin="0,0,0,16">
-                            <Ellipse x:Name="loadingSpinner" Width="56" Height="56" Stroke="{StaticResource AccentBrush}"
-                                     StrokeThickness="5" StrokeDashArray="6 3" RenderTransformOrigin="0.5,0.5">
-                                <Ellipse.RenderTransform>
-                                    <RotateTransform x:Name="spinnerRotate"/>
-                                </Ellipse.RenderTransform>
-                                <Ellipse.Triggers>
+                            <Image Source="/Assets/icon_loading_folder.png" Width="120" Height="120"
+                                   RenderOptions.BitmapScalingMode="HighQuality"/>
+                            <Image x:Name="loadingSpinner" Source="/Assets/icon_spinner.png" Width="56" Height="56"
+                                   Margin="0,13,0,0" RenderTransformOrigin="0.5,0.5"
+                                   RenderOptions.BitmapScalingMode="HighQuality">
+                                <Image.RenderTransform>
+                                    <TransformGroup>
+                                        <ScaleTransform ScaleX="-1"/>
+                                        <RotateTransform x:Name="spinnerRotate"/>
+                                    </TransformGroup>
+                                </Image.RenderTransform>
+                                <Image.Triggers>
                                     <EventTrigger RoutedEvent="Loaded">
                                         <BeginStoryboard>
                                             <Storyboard RepeatBehavior="Forever">
@@ -379,9 +385,9 @@
                                             </Storyboard>
                                         </BeginStoryboard>
                                     </EventTrigger>
-                                </Ellipse.Triggers>
-                            </Ellipse>
-                            <Image x:Name="loadingCurrentIcon" Stretch="Uniform" Visibility="Collapsed"
+                                </Image.Triggers>
+                            </Image>
+                            <Image x:Name="loadingCurrentIcon" Stretch="Uniform" Visibility="Collapsed" Margin="0,13,0,0"
                                    RenderOptions.BitmapScalingMode="HighQuality"/>
                         </Grid>
 
@@ -404,6 +410,10 @@
                             <Button x:Name="btnSkipImage" Content="Skip this image" Width="130" Height="34"
                                     Margin="0,0,10,0" Visibility="Collapsed" Style="{StaticResource SecondaryButtonStyle}"
                                     Click="btnSkipImage_Click"/>
+                            <Button x:Name="btnSkipAllSmallImages" Content="Skip all small images" Width="150" Height="34"
+                                    Margin="0,0,10,0" Visibility="Collapsed" Style="{StaticResource SecondaryButtonStyle}"
+                                    Click="btnSkipAllSmallImages_Click"
+                                    ToolTip="Skips every too-small image for the rest of this session, without asking again."/>
                             <Button x:Name="btnCancelConversion" Content="Cancel" Width="90" Height="34"
                                     Style="{StaticResource SecondaryButtonStyle}" Click="btnCancelConversion_Click"/>
                         </StackPanel>

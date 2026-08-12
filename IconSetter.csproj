@@ -33,6 +33,8 @@
     <None Remove="Assets\icon_options.png" />
     <None Remove="Assets\icon_recent.png" />
     <None Remove="Assets\icon_help.png" />
+    <None Remove="Assets\icon_loading_folder.png" />
+    <None Remove="Assets\icon_spinner.png" />
   </ItemGroup>
 
   <ItemGroup>
@@ -46,6 +48,8 @@
     <Resource Include="Assets\icon_options.png" />
     <Resource Include="Assets\icon_recent.png" />
     <Resource Include="Assets\icon_help.png" />
+    <Resource Include="Assets\icon_loading_folder.png" />
+    <Resource Include="Assets\icon_spinner.png" />
   </ItemGroup>
 
 </Project>

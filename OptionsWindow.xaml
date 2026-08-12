@@ -39,6 +39,11 @@
 
         <Separator Margin="0,10" Opacity="0.4"/>
 
+        <CheckBox x:Name="chkAlwaysSkipSmallImages" Content="Always skip converting small images"
+                  ToolTip="Automatically skips any icon*.png/jpg/bmp image smaller than 256×256 during conversion, without asking. Off by default."/>
+
+        <Separator Margin="0,10" Opacity="0.4"/>
+
         <CheckBox x:Name="chkDarkMode" Content="Dark mode"
                   ToolTip="Switch the gallery to a dark background, similar to Explorer's dark theme."/>
 
@@ -50,8 +55,32 @@
         <CheckBox x:Name="chkAlwaysShowMultipleIcons" Content="Always show folders with multiple .ico"
                   ToolTip="Makes the 'Has multiple .ico' chip start turned on every time you scan a folder, instead of off. You can still turn it back off by clicking the chip."/>
 
-        <Button x:Name="btnDone" Content="Done" Style="{StaticResource PrimaryButtonStyle}"
-                Width="100" Height="36" HorizontalAlignment="Right" Margin="0,20,0,0"
-                Click="btnDone_Click"/>
+        <Separator Margin="0,10" Opacity="0.4"/>
+
+        <TextBlock Text="Excluded folders" Style="{StaticResource SectionHeaderStyle}"/>
+        <TextBlock TextWrapping="Wrap" FontSize="12" Margin="0,0,0,8" Foreground="{StaticResource TextSecondaryBrush}"
+                   Text="Folders listed here, and everything inside them, are skipped entirely during scans - no conversion, no icon setting, nothing."/>
+        <ListBox x:Name="lstExcludedFolders" Height="90" Margin="0,0,0,8"/>
+        <StackPanel Orientation="Horizontal">
+            <Button x:Name="btnAddExcludedFolder" Content="Add folder…" Width="110" Height="30" Margin="0,0,8,0"
+                    Style="{StaticResource SecondaryButtonStyle}" Click="btnAddExcludedFolder_Click"/>
+            <Button x:Name="btnRemoveExcludedFolder" Content="Remove selected" Width="130" Height="30"
+                    Style="{StaticResource SecondaryButtonStyle}" Click="btnRemoveExcludedFolder_Click"/>
+        </StackPanel>
+
+        <Separator Margin="0,10" Opacity="0.4"/>
+
+        <Grid Margin="0,10,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Button x:Name="btnClearScanData" Grid.Column="0" Content="Clear scan data" Style="{StaticResource DangerButtonStyle}"
+                    Width="130" Height="36" Click="btnClearScanData_Click"
+                    ToolTip="Deletes the saved scan cache, so the next scan starts fresh instead of reusing remembered results. Doesn't touch any folders or icons - only this app's own saved data."/>
+            <Button x:Name="btnDone" Grid.Column="2" Content="Done" Style="{StaticResource PrimaryButtonStyle}"
+                    Width="100" Height="36" Click="btnDone_Click"/>
+        </Grid>
     </StackPanel>
 </Window>

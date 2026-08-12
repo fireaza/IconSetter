@@ -19,6 +19,8 @@ namespace IconSetter.Services
         public bool AlwaysShowUpToDate { get; set; } = false;
         public List<string> RecentFolders { get; set; } = new();
         public bool HideIcoAfterApply { get; set; } = true;
+        public bool AlwaysSkipSmallImages { get; set; } = false;
+        public List<string> ExcludedFolders { get; set; } = new();
         public bool AlwaysShowMultipleIcons { get; set; } = false;
 
         private static string PortablePath =>

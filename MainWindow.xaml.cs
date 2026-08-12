@@ -25,14 +25,18 @@ namespace IconSetter
         private readonly Random rnd = new();
         private ICollectionView? folderResultsView;
         private bool _cancelRequested;
+        private bool _skipAllSmallImagesThisSession; // in-memory only - resets on app restart, not saved to settings
         private TaskCompletionSource<bool>? _smallImagePrompt;
         private AppSettings _settings = new();
+        private ScanCache _scanCache = new();
         private bool _explorerMode;
         private string _explorerRoot = "";
         private string _explorerCurrent = "";
         private bool _darkMode;
         private bool _alwaysShowUpToDate;
         private bool _hideIcoAfterApply = true;
+        private bool _alwaysSkipSmallImages;
+        private List<string> _excludedFolders = new();
         private bool _alwaysShowMultipleIcons;
         private List<string> _recentFolders = new();
 
@@ -47,6 +51,18 @@ namespace IconSetter
         // filter - the normal New/Changed/up-to-date rules in ShouldDisplayInGallery apply instead.
         private string? _activeCategoryFilter;
         private bool _updatingCategoryChips;
+
+        /// <summary>Incremented at the start of every RefreshFlatViewAsync/PopulateExplorerLevelAsync
+        /// call. Both methods yield partway through for large folders, so if a second call starts
+        /// before an earlier one finishes (e.g. rapid filter toggling, or the scan pipeline's own
+        /// call landing while a leftover call from before it is still paused at a yield), the two
+        /// would otherwise interleave their writes to the same FolderResults collection - showing a
+        /// mix of both filter states, or the empty-state message rendered over stale results from
+        /// the other call. Each call captures its own generation number and checks it after every
+        /// yield; a mismatch means a newer call has since started, so it abandons its own work
+        /// immediately rather than continuing to write.</summary>
+        private int _galleryRefreshGeneration;
+
         private bool _filterMultipleIconsOnly;
 
         /// <summary>Text color for gallery folder names - light grey in dark mode, the normal
@@ -76,8 +92,10 @@ namespace IconSetter
                 DarkModePreview = _darkMode,
                 AlwaysShowUpToDate = _alwaysShowUpToDate,
                 HideIcoAfterApply = _hideIcoAfterApply,
-                AlwaysShowMultipleIcons = _alwaysShowMultipleIcons
+                AlwaysShowMultipleIcons = _alwaysShowMultipleIcons,
+                AlwaysSkipSmallImages = _alwaysSkipSmallImages
             };
+            foreach (var f in _excludedFolders) dlg.ExcludedFolders.Add(f);
             dlg.ShowDialog();
 
             _convertNonIco = dlg.ConvertNonIco;
@@ -86,6 +104,8 @@ namespace IconSetter
             _iconModeIndex = dlg.IconModeIndex;
             _alwaysShowUpToDate = dlg.AlwaysShowUpToDate;
             _hideIcoAfterApply = dlg.HideIcoAfterApply;
+            _alwaysSkipSmallImages = dlg.AlwaysSkipSmallImages;
+            _excludedFolders = dlg.ExcludedFolders.ToList();
             bool alwaysShowMultipleIconsBefore = _alwaysShowMultipleIcons;
             _alwaysShowMultipleIcons = dlg.AlwaysShowMultipleIcons;
             if (_alwaysShowMultipleIcons != alwaysShowMultipleIconsBefore)
@@ -103,6 +123,34 @@ namespace IconSetter
                 OnPropertyChanged(nameof(GalleryTextBrush));
                 OnPropertyChanged(nameof(GallerySecondaryTextBrush));
             }
+
+            if (dlg.ScanDataCleared)
+            {
+                _scanCache.ClearAndDelete();
+                ResetScanDisplay();
+            }
+        }
+
+        /// <summary>Resets the gallery, chip counts, and "N folder(s) detected" text back to their
+        /// pre-scan state, matching what a fresh launch looks like before anything's been scanned.
+        /// Used by "Clear scan data" - without this, clearing the cache is invisible: the chip
+        /// counts and gallery aren't derived from the cache at all (they're always computed fresh
+        /// from disk), so nothing on screen would visibly change even though the clear genuinely
+        /// worked, leaving no confirmation it did anything.</summary>
+        private void ResetScanDisplay()
+        {
+            _allFolders.Clear();
+            FolderResults.Clear();
+            _galleryRefreshGeneration++; // abandon any in-flight refresh so it doesn't repopulate over this reset
+
+            chipWithIco.Content = "Has .ico (0)";
+            chipWithNonIco.Content = "Has \"icon\" image (0)";
+            chipWithBoth.Content = "Has both (0)";
+            chipWithoutIcon.Content = "No .ico (0)";
+            chipMultipleIcons.Content = "Has multiple .ico (0)";
+            txtPreviewCount.Text = "";
+
+            UpdateGalleryEmptyState();
         }
 
         private void btnHelp_Click(object sender, RoutedEventArgs e)
@@ -171,6 +219,7 @@ namespace IconSetter
             folderResultsView = CollectionViewSource.GetDefaultView(FolderResults);
 
             _settings = AppSettings.Load();
+            _scanCache = ScanCache.Load();
             txtRoot.Text = _settings.LastRootFolder;
             chkSingleFolder.IsChecked = _settings.SingleFolderOnly;
             _convertNonIco = _settings.ConvertNonIco;
@@ -191,14 +240,13 @@ namespace IconSetter
             _alwaysShowUpToDate = _settings.AlwaysShowUpToDate;
             chkShowUpToDate.IsChecked = _alwaysShowUpToDate;
             _hideIcoAfterApply = _settings.HideIcoAfterApply;
+            _alwaysSkipSmallImages = _settings.AlwaysSkipSmallImages;
+            _excludedFolders = _settings.ExcludedFolders ?? new List<string>();
             _alwaysShowMultipleIcons = _settings.AlwaysShowMultipleIcons;
             chipMultipleIcons.IsChecked = _alwaysShowMultipleIcons;
 
             _recentFolders = _settings.RecentFolders ?? new List<string>();
             RebuildRecentFoldersMenu();
-
-            if (!string.IsNullOrWhiteSpace(txtRoot.Text) && Directory.Exists(txtRoot.Text))
-                UpdateFolderStats(CollectFolders(txtRoot.Text));
 
             UpdateGalleryEmptyState();
         }
@@ -216,9 +264,12 @@ namespace IconSetter
             _settings.DarkModePreview = _darkMode;
             _settings.AlwaysShowUpToDate = _alwaysShowUpToDate;
             _settings.HideIcoAfterApply = _hideIcoAfterApply;
+            _settings.AlwaysSkipSmallImages = _alwaysSkipSmallImages;
+            _settings.ExcludedFolders = _excludedFolders;
             _settings.AlwaysShowMultipleIcons = _alwaysShowMultipleIcons;
             _settings.RecentFolders = _recentFolders;
             _settings.Save();
+            _scanCache.Save();
         }
 
         // ===================== Drag & drop =====================
@@ -245,27 +296,82 @@ namespace IconSetter
 
         // ===================== Folder scanning =====================
 
-        /// <summary>True if the folder has an icon*.png/jpg/jpeg/bmp file that hasn't been
-        /// converted to .ico yet. Shared by the conversion pass, the quick pre-scan chip counts,
-        /// and each FolderResult's own HasUnconvertedImage flag (used by the category filter
-        /// chips), so all three agree on the same definition.</summary>
-        private static bool FolderHasUnconvertedImage(string folder) =>
-            Directory.GetFiles(folder, "icon*.*")
-                .Any(f => f.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
-                          f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
-                          f.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase) ||
-                          f.EndsWith(".bmp", StringComparison.OrdinalIgnoreCase));
+        /// <summary>One folder's icon*.* files, listed once and classified in memory - shared
+        /// across every step of a scan that needs to know "what icon-related files are here" so
+        /// none of them have to separately re-list the same directory. Built fresh whenever the
+        /// underlying files could have changed (see SnapshotFolders and where it's called from
+        /// ScanAndBuildGalleryAsync) - never reused across a filesystem-modifying step like
+        /// conversion, since that would mean acting on stale information about what's on disk.</summary>
+        private sealed class FolderFileSnapshot
+        {
+            public List<string> IcoFiles { get; init; } = new();
+            public List<string> UnconvertedImages { get; init; } = new();
+            public bool HasUnconvertedImage => UnconvertedImages.Count > 0;
+        }
 
-        private List<string> CollectFolders(string root)
+        /// <summary>Lists each folder's icon*.* files exactly once and classifies the results by
+        /// extension, instead of the previous approach of separately calling Directory.GetFiles
+        /// with "icon*.ico" and "icon*.*" patterns (and doing that 2-4 times per folder across the
+        /// different steps of a scan). Pure I/O, safe to run on a background thread.</summary>
+        private static Dictionary<string, FolderFileSnapshot> SnapshotFolders(List<string> folders)
+        {
+            var result = new Dictionary<string, FolderFileSnapshot>(folders.Count, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var folder in folders)
+            {
+                var icoFiles = new List<string>();
+                var images = new List<string>();
+                try
+                {
+                    foreach (var f in Directory.GetFiles(folder, "icon*.*"))
+                    {
+                        if (f.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
+                            icoFiles.Add(f);
+                        else if (f.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
+                                 f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
+                                 f.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase) ||
+                                 f.EndsWith(".bmp", StringComparison.OrdinalIgnoreCase))
+                            images.Add(f);
+                    }
+                }
+                catch { /* permission errors etc. - leave this folder's snapshot empty, same tolerance the individual calls this replaces already had */ }
+
+                result[folder] = new FolderFileSnapshot { IcoFiles = icoFiles, UnconvertedImages = images };
+            }
+
+            return result;
+        }
+
+        private List<string> CollectFolders(string root, bool singleFolderOnly)
         {
             var folders = new List<string> { root };
             try
             {
-                if (chkSingleFolder.IsChecked != true)
+                if (!singleFolderOnly)
                     folders.AddRange(Directory.GetDirectories(root, "*", SearchOption.AllDirectories));
             }
             catch { /* permission errors on some subfolders shouldn't kill the whole scan */ }
+
+            if (_excludedFolders.Count > 0)
+                folders = folders.Where(f => !IsExcludedFolder(f)).ToList();
+
             return folders;
+        }
+
+        /// <summary>True if this folder is itself excluded, or sits anywhere underneath an
+        /// excluded folder - excluding a folder excludes everything inside it too.</summary>
+        private bool IsExcludedFolder(string folder)
+        {
+            string normalized = folder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            foreach (var excluded in _excludedFolders)
+            {
+                string excludedNormalized = excluded.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (string.Equals(normalized, excludedNormalized, StringComparison.OrdinalIgnoreCase))
+                    return true;
+                if (normalized.StartsWith(excludedNormalized + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
         }
 
         private async void btnBrowse_Click(object sender, RoutedEventArgs e)
@@ -283,7 +389,12 @@ namespace IconSetter
             if (e.Key != System.Windows.Input.Key.Enter) return;
             e.Handled = true;
             if (!string.IsNullOrWhiteSpace(txtRoot.Text) && Directory.Exists(txtRoot.Text))
-                UpdateFolderStats(CollectFolders(txtRoot.Text));
+            {
+                string currentRoot = txtRoot.Text;
+                bool singleFolderOnly = chkSingleFolder.IsChecked == true;
+                var folders = await Task.Run(() => CollectFolders(currentRoot, singleFolderOnly));
+                await UpdateFolderStatsAsync(folders);
+            }
             await ScanAndBuildGalleryAsync();
         }
 
@@ -292,8 +403,7 @@ namespace IconSetter
         private async Task ScanAndBuildGalleryAsync()
         {
             FolderResults.Clear();
-            chkShowUpToDate.IsChecked = _alwaysShowUpToDate;
-            chipMultipleIcons.IsChecked = _alwaysShowMultipleIcons;
+            txtGalleryEmpty.Visibility = Visibility.Collapsed; // clear the "Pick a folder…" placeholder immediately - it shouldn't linger behind the loading overlay for the whole scan
             string root = txtRoot.Text;
             if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
             {
@@ -302,32 +412,129 @@ namespace IconSetter
             }
 
             AddToRecentFolders(root);
+            _cancelRequested = false;
 
-            var folders = CollectFolders(root);
-            UpdateFolderStats(folders);
+            // Walking a large folder tree and inspecting every folder's files is real disk I/O
+            // and CPU work - potentially thousands of Directory.GetFiles calls for a big tree -
+            // so each heavy step below runs on a background thread via Task.Run rather than
+            // blocking the UI thread. Left synchronous, a large enough tree freezes the whole
+            // window and can trigger a Windows "Not Responding" prompt, even though the app is
+            // still working correctly and eventually recovers.
+            ShowScanningOverlay("Scanning folders…");
+            List<string> folders;
+            Dictionary<string, FolderFileSnapshot> snapshot;
+            try
+            {
+                bool singleFolderOnly = chkSingleFolder.IsChecked == true;
+                folders = await Task.Run(() => CollectFolders(root, singleFolderOnly));
+                if (_cancelRequested) return;
+
+                // One shared listing of each folder's icon*.* files, used by the stats pass right
+                // below and by conversion further down - instead of each step separately
+                // re-listing the same folders (previously 2-4 Directory.GetFiles calls per folder
+                // across the different steps of a scan).
+                snapshot = await Task.Run(() => SnapshotFolders(folders));
+                if (_cancelRequested) return;
+
+                // Also covered by this same overlay - ComputeFolderStats does its own per-folder
+                // Directory.GetFiles calls (twice per folder, for a large tree), and previously ran
+                // with the overlay already hidden, leaving several seconds where the gallery just
+                // looked empty with nothing indicating anything was still happening.
+                await UpdateFolderStatsAsync(folders, snapshot);
+            }
+            finally
+            {
+                HideScanningOverlay();
+            }
+            if (_cancelRequested) return;
+
+            // Whether there's actually anything for the conversion step to do - computed here
+            // (from the snapshot already in hand) so it's known below regardless of whether
+            // ConvertImagesAsync itself gets called at all, or which of the two cancels it might.
+            bool anyImagesToConvert = _convertNonIco &&
+                folders.Any(f => snapshot.TryGetValue(f, out var s) && s.HasUnconvertedImage);
 
             if (_convertNonIco)
             {
-                bool completed = await ConvertImagesAsync(folders, root);
+                bool completed = await ConvertImagesAsync(folders, root, snapshot);
                 if (!completed) return; // user cancelled
             }
 
             if (_enrichIco)
             {
-                EnrichExistingIcons(folders);
+                ShowScanningOverlay("Adding missing icon sizes…");
+                try
+                {
+                    await Task.Run(() => EnrichExistingIcons(folders));
+                }
+                finally
+                {
+                    HideScanningOverlay();
+                }
+                if (_cancelRequested) return;
             }
 
-            BuildAllFolderResults(folders);
-            UpdateFolderStats(folders); // refresh chip counts - conversion above can change them
+            ShowScanningOverlay("Building folder list…");
+            try
+            {
+                // Conversion/enrichment can change what .ico files exist on disk, so this needs a
+                // fresh read - reusing the earlier snapshot would mean BuildAllFolderResults never
+                // sees newly-converted icons. If neither actually ran (or ran but found nothing to
+                // do), the earlier snapshot is still accurate, so re-reading the same folders again
+                // would just be wasted I/O - this is the common case for re-scanning a folder tree
+                // that's already fully converted, since "convert non-.ico images" defaults to on.
+                if (anyImagesToConvert || _enrichIco)
+                {
+                    snapshot = await Task.Run(() => SnapshotFolders(folders));
+                    if (_cancelRequested) return;
+                }
+
+                await Task.Run(() => BuildAllFolderResults(folders, snapshot));
+                if (_cancelRequested) return;
+
+                // Same reasoning as the first UpdateFolderStatsAsync call above - keeping this
+                // under the same overlay avoids another silent multi-second gap between the
+                // overlay disappearing and the gallery actually being repopulated.
+                await UpdateFolderStatsAsync(folders, snapshot); // refresh chip counts - conversion above can change them
+            }
+            finally
+            {
+                HideScanningOverlay();
+            }
+            if (_cancelRequested) return;
+
             if (_explorerMode)
             {
                 _explorerRoot = root.TrimEnd(Path.DirectorySeparatorChar);
-                PopulateExplorerLevel(_explorerRoot);
+                await PopulateExplorerLevelAsync(_explorerRoot);
             }
             else
             {
-                RefreshFlatView();
+                await RefreshFlatViewAsync();
             }
+        }
+
+        /// <summary>Shows the loading overlay for a background phase that has no natural per-item
+        /// progress to report (unlike image conversion) - just a spinner and a status line. The
+        /// warning-dialog controls are hidden since they only apply during image conversion.</summary>
+        private void ShowScanningOverlay(string message)
+        {
+            loadingPanel.Visibility = Visibility.Visible;
+            loadingText.Text = message;
+            loadingProgress.IsIndeterminate = true;
+            loadingSpinner.Visibility = Visibility.Visible;
+            loadingCurrentIcon.Visibility = Visibility.Collapsed;
+            warningContainer.Visibility = Visibility.Collapsed;
+            btnContinueToPreview.Visibility = Visibility.Collapsed;
+            btnSkipImage.Visibility = Visibility.Collapsed;
+            btnSkipAllSmallImages.Visibility = Visibility.Collapsed;
+        }
+
+        private void HideScanningOverlay()
+        {
+            loadingPanel.Visibility = Visibility.Collapsed;
+            loadingProgress.IsIndeterminate = false;
+            loadingProgress.Value = 0;
         }
 
         /// <summary>Adds a successfully-scanned root to the recent-folders list, most-recent-first,
@@ -394,9 +601,9 @@ namespace IconSetter
             RebuildRecentFoldersMenu();
         }
 
-        private async Task<bool> ConvertImagesAsync(List<string> folders, string root)
+        private async Task<bool> ConvertImagesAsync(List<string> folders, string root, Dictionary<string, FolderFileSnapshot> snapshot)
         {
-            bool anyImages = folders.Any(FolderHasUnconvertedImage);
+            bool anyImages = folders.Any(f => snapshot.TryGetValue(f, out var s) && s.HasUnconvertedImage);
 
             if (!anyImages) return true; // nothing to convert - skip the overlay entirely
 
@@ -418,12 +625,9 @@ namespace IconSetter
             {
                 if (_cancelRequested) break;
 
-                var imageFiles = Directory.GetFiles(folder, "icon*.*")
-                    .Where(f => f.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
-                                f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
-                                f.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase) ||
-                                f.EndsWith(".bmp", StringComparison.OrdinalIgnoreCase))
-                    .ToList();
+                var imageFiles = snapshot.TryGetValue(folder, out var folderFiles)
+                    ? folderFiles.UnconvertedImages
+                    : new List<string>();
 
                 foreach (var img in imageFiles)
                 {
@@ -440,6 +644,8 @@ namespace IconSetter
 
                         if (imgWidth < 256 || imgHeight < 256)
                         {
+                            if (_alwaysSkipSmallImages || _skipAllSmallImagesThisSession) continue;
+
                             // Show the actual problem image (not whatever was last converted) and
                             // pause here until the user decides, one image at a time - rather than
                             // silently collecting every small image and asking about all of them
@@ -523,6 +729,7 @@ namespace IconSetter
             warningContainer.Visibility = Visibility.Visible;
             btnContinueToPreview.Visibility = Visibility.Visible;
             btnSkipImage.Visibility = Visibility.Visible;
+            btnSkipAllSmallImages.Visibility = Visibility.Visible;
 
             return _smallImagePrompt.Task;
         }
@@ -578,14 +785,23 @@ namespace IconSetter
 
         // ===================== Preview building =====================
 
-        private void BuildAllFolderResults(List<string> folders)
+        private void BuildAllFolderResults(List<string> folders, Dictionary<string, FolderFileSnapshot> snapshot)
         {
             _allFolders.Clear();
             int mode = _iconModeIndex; // 0 keep, 1 first, 2 random, 3 newest
 
             foreach (var folder in folders)
             {
-                var icoFiles = Directory.GetFiles(folder, "icon*.ico").ToList();
+                // Random mode picks a new icon every time by definition - reusing a cached
+                // selection would defeat the entire point of choosing it, so this mode always
+                // does a full fresh scan rather than consulting the cache.
+                if (mode != 2 && TryReuseCachedResult(folder, mode, out var cachedFr))
+                {
+                    _allFolders[folder] = cachedFr!;
+                    continue;
+                }
+
+                var icoFiles = snapshot.TryGetValue(folder, out var folderFiles) ? folderFiles.IcoFiles : new List<string>();
                 string? selected = null;
 
                 if (icoFiles.Count > 0)
@@ -605,6 +821,9 @@ namespace IconSetter
                 bool hasSub = false;
                 try { hasSub = Directory.EnumerateDirectories(folder).Any(); } catch { }
 
+                bool hasUnconvertedImage = folderFiles?.HasUnconvertedImage ?? false;
+                string? customName = ReadLocalizedNameFromDesktopIni(folder);
+
                 var fr = new FolderResult
                 {
                     FolderPath = folder,
@@ -612,18 +831,115 @@ namespace IconSetter
                     SelectedIcon = selected,
                     Status = "Pending",
                     HasSubfolders = hasSub,
-                    HasUnconvertedImage = FolderHasUnconvertedImage(folder),
-                    CustomName = ReadLocalizedNameFromDesktopIni(folder)
+                    HasUnconvertedImage = hasUnconvertedImage,
+                    CustomName = customName
                 };
 
                 if (selected != null) fr.IconState = DetermineIconState(folder, selected);
 
                 _allFolders[folder] = fr;
+
+                // Random mode is never cached (see above) - every other mode gets its result
+                // stored for next time, keyed on the filesystem signals that would need to change
+                // for it to go stale.
+                if (mode != 2)
+                    StoreCacheEntry(folder, mode, icoFiles, selected, hasSub, hasUnconvertedImage, customName, fr.IconState);
             }
         }
 
-        /// <summary>Populates the gallery with every folder in the master set that actually has an
-        /// icon to show - the "Show all folders" flat view.</summary>
+        /// <summary>Attempts to reuse a cached scan result for this folder. Returns false (leaving
+        /// fr null) if there's no entry, the icon mode used to build it doesn't match the current
+        /// one, or any of the three staleness signals (folder mtime, desktop.ini mtime, selected
+        /// icon's own mtime - see FolderScanCacheEntry) no longer match what's on disk. In every
+        /// one of those cases the caller falls through to a full, fresh scan of this folder rather
+        /// than risking a stale result.</summary>
+        private bool TryReuseCachedResult(string folder, int mode, out FolderResult? fr)
+        {
+            fr = null;
+            FolderScanCacheEntry? entry;
+            lock (_scanCache)
+            {
+                if (!_scanCache.Entries.TryGetValue(folder, out entry)) return false;
+            }
+            if (entry.IconModeIndexUsed != mode) return false;
+
+            long folderMTime;
+            try { folderMTime = Directory.GetLastWriteTimeUtc(folder).Ticks; }
+            catch { return false; }
+            if (folderMTime != entry.FolderMTimeTicks) return false;
+
+            string desktopIni = Path.Combine(folder, "desktop.ini");
+            long? desktopIniMTime = null;
+            if (File.Exists(desktopIni))
+            {
+                try { desktopIniMTime = File.GetLastWriteTimeUtc(desktopIni).Ticks; }
+                catch { return false; }
+            }
+            if (desktopIniMTime != entry.DesktopIniMTimeTicks) return false;
+
+            long? selectedIconMTime = null;
+            if (entry.SelectedIcon != null)
+            {
+                if (!File.Exists(entry.SelectedIcon)) return false;
+                try { selectedIconMTime = File.GetLastWriteTimeUtc(entry.SelectedIcon).Ticks; }
+                catch { return false; }
+            }
+            if (selectedIconMTime != entry.SelectedIconMTimeTicks) return false;
+
+            fr = new FolderResult
+            {
+                FolderPath = folder,
+                IconFiles = entry.IconFiles,
+                SelectedIcon = entry.SelectedIcon,
+                Status = "Pending",
+                HasSubfolders = entry.HasSubfolders,
+                HasUnconvertedImage = entry.HasUnconvertedImage,
+                CustomName = entry.CustomName,
+                IconState = entry.IconState
+            };
+            return true;
+        }
+
+        private void StoreCacheEntry(string folder, int mode, List<string> icoFiles, string? selected,
+            bool hasSub, bool hasUnconvertedImage, string? customName, string iconState)
+        {
+            long folderMTime;
+            try { folderMTime = Directory.GetLastWriteTimeUtc(folder).Ticks; }
+            catch { return; } // can't even read the folder's own mtime - don't cache a possibly-wrong entry
+
+            string desktopIni = Path.Combine(folder, "desktop.ini");
+            long? desktopIniMTime = null;
+            if (File.Exists(desktopIni))
+            {
+                try { desktopIniMTime = File.GetLastWriteTimeUtc(desktopIni).Ticks; } catch { }
+            }
+
+            long? selectedIconMTime = null;
+            if (selected != null)
+            {
+                try { selectedIconMTime = File.GetLastWriteTimeUtc(selected).Ticks; } catch { }
+            }
+
+            var entry = new FolderScanCacheEntry
+            {
+                FolderMTimeTicks = folderMTime,
+                DesktopIniMTimeTicks = desktopIniMTime,
+                SelectedIconMTimeTicks = selectedIconMTime,
+                IconModeIndexUsed = mode,
+                IconFiles = icoFiles,
+                SelectedIcon = selected,
+                HasSubfolders = hasSub,
+                HasUnconvertedImage = hasUnconvertedImage,
+                CustomName = customName,
+                IconState = iconState
+            };
+
+            lock (_scanCache)
+            {
+                _scanCache.Entries[folder] = entry;
+            }
+        }
+
         /// <summary>How many currently-scanned folders Apply will actually touch - the same
         /// definition btnApply_Click itself uses, so the header text and the confirmation dialog
         /// never disagree. Independent of any gallery filter/search/view-mode narrowing, since
@@ -658,16 +974,38 @@ namespace IconSetter
             txtGalleryEmpty.Visibility = Visibility.Visible;
         }
 
-        private void RefreshFlatView()
+        /// <summary>Populates the gallery for the "Show all folders" flat view. Adds items in
+        /// batches with a yield in between rather than all at once - for a folder with thousands
+        /// of matches, WPF creating/laying out that many tiles is real UI-thread work that can't
+        /// be moved to a background thread (only the UI thread can touch visual elements), so this
+        /// doesn't reduce the total time, but it keeps the window responsive and repainting
+        /// progressively instead of going stiff for the whole duration.</summary>
+        private async Task RefreshFlatViewAsync()
         {
+            int myGeneration = ++_galleryRefreshGeneration;
+
             FolderResults.Clear();
-            foreach (var fr in _allFolders.Values
-                         .Where(f => (f.IconFiles.Count > 0 || _activeCategoryFilter != null) && ShouldDisplayInGallery(f))
-                         .OrderBy(f => Path.GetFileName(f.FolderPath.TrimEnd(Path.DirectorySeparatorChar)), StringComparer.OrdinalIgnoreCase)
-                         .ThenBy(f => f.FolderPath, StringComparer.OrdinalIgnoreCase))
+            txtGalleryEmpty.Visibility = Visibility.Collapsed; // clear any stale message from before this call - re-shown at the end only if there really is nothing
+            var toShow = _allFolders.Values
+                .Where(f => (f.IconFiles.Count > 0 || _activeCategoryFilter != null) && ShouldDisplayInGallery(f))
+                .OrderBy(f => Path.GetFileName(f.FolderPath.TrimEnd(Path.DirectorySeparatorChar)), StringComparer.OrdinalIgnoreCase)
+                .ThenBy(f => f.FolderPath, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            int i = 0;
+            foreach (var fr in toShow)
             {
+                if (myGeneration != _galleryRefreshGeneration) return; // a newer call has since started - abandon this one
+
                 FolderResults.Add(fr);
+                if (++i % 250 == 0)
+                {
+                    await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
+                    if (myGeneration != _galleryRefreshGeneration) return;
+                }
             }
+
+            if (myGeneration != _galleryRefreshGeneration) return;
             RefreshPreviewCount();
             UpdateGalleryEmptyState();
         }
@@ -766,7 +1104,7 @@ namespace IconSetter
 
         // ===================== Explorer-style browsing =====================
 
-        private void ViewMode_Changed(object sender, RoutedEventArgs e)
+        private async void ViewMode_Changed(object sender, RoutedEventArgs e)
         {
             bool showAll = rbShowAllFolders.IsChecked == true;
             _explorerMode = !showAll;
@@ -775,31 +1113,31 @@ namespace IconSetter
             if (_explorerMode)
             {
                 _explorerRoot = txtRoot.Text.TrimEnd(Path.DirectorySeparatorChar);
-                PopulateExplorerLevel(_explorerRoot);
+                await PopulateExplorerLevelAsync(_explorerRoot);
             }
             else
             {
-                RefreshFlatView();
+                await RefreshFlatViewAsync();
             }
         }
 
-        private void ChkShowUpToDate_Changed(object sender, RoutedEventArgs e)
+        private async void ChkShowUpToDate_Changed(object sender, RoutedEventArgs e)
         {
             // Purely re-filters whatever's currently on screen - doesn't change which mode
             // (flat vs Explorer-style) is active.
-            if (_explorerMode) PopulateExplorerLevel(_explorerCurrent);
-            else RefreshFlatView();
+            if (_explorerMode) await PopulateExplorerLevelAsync(_explorerCurrent);
+            else await RefreshFlatViewAsync();
         }
 
         /// <summary>"Has multiple icons" is an independent filter, not part of the mutually
         /// exclusive category chip group - a folder can be "With .ico" AND have multiple icons at
         /// once, so this combines with the active category filter (if any) via AND rather than
         /// replacing it.</summary>
-        private void ChkMultipleIconsFilter_Changed(object sender, RoutedEventArgs e)
+        private async void ChkMultipleIconsFilter_Changed(object sender, RoutedEventArgs e)
         {
             _filterMultipleIconsOnly = chipMultipleIcons.IsChecked == true;
-            if (_explorerMode) PopulateExplorerLevel(_explorerCurrent);
-            else RefreshFlatView();
+            if (_explorerMode) await PopulateExplorerLevelAsync(_explorerCurrent);
+            else await RefreshFlatViewAsync();
         }
 
         /// <summary>Category filter chips (With .ico / Needs conversion / Has both / No icon yet)
@@ -807,7 +1145,7 @@ namespace IconSetter
         /// ToggleChipStyle look doesn't exist for radio buttons, so exclusivity is enforced here
         /// instead. _updatingCategoryChips guards against the recursive Unchecked events firing
         /// while this handler is itself unchecking the other chips.</summary>
-        private void CategoryChip_Changed(object sender, RoutedEventArgs e)
+        private async void CategoryChip_Changed(object sender, RoutedEventArgs e)
         {
             if (_updatingCategoryChips) return;
             if (sender is not System.Windows.Controls.CheckBox chip) return;
@@ -827,16 +1165,21 @@ namespace IconSetter
                 _updatingCategoryChips = false;
             }
 
-            if (_explorerMode) PopulateExplorerLevel(_explorerCurrent);
-            else RefreshFlatView();
+            if (_explorerMode) await PopulateExplorerLevelAsync(_explorerCurrent);
+            else await RefreshFlatViewAsync();
         }
 
         /// <summary>Shows only the immediate subfolders of <paramref name="folder"/>, reusing the
         /// same FolderResult instances as the master set so any icon choice made here (prev/next/
-        /// shuffle) is the same choice Apply will see later.</summary>
-        private void PopulateExplorerLevel(string folder)
+        /// shuffle) is the same choice Apply will see later. Batched the same way as
+        /// RefreshFlatViewAsync, for the (less common but possible) case of a single folder having
+        /// thousands of direct subfolders.</summary>
+        private async Task PopulateExplorerLevelAsync(string folder)
         {
+            int myGeneration = ++_galleryRefreshGeneration;
+
             FolderResults.Clear();
+            txtGalleryEmpty.Visibility = Visibility.Collapsed; // clear any stale message from before this call - re-shown at the end only if there really is nothing
             _explorerCurrent = folder;
 
             IEnumerable<string> subfolders;
@@ -850,12 +1193,23 @@ namespace IconSetter
                 subfolders = Enumerable.Empty<string>();
             }
 
+            int i = 0;
             foreach (var sub in subfolders)
             {
+                if (myGeneration != _galleryRefreshGeneration) return; // a newer call has since started - abandon this one
+
                 if (_allFolders.TryGetValue(sub, out var fr) && ShouldDisplayInGallery(fr))
+                {
                     FolderResults.Add(fr);
+                    if (++i % 250 == 0)
+                    {
+                        await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
+                        if (myGeneration != _galleryRefreshGeneration) return;
+                    }
+                }
             }
 
+            if (myGeneration != _galleryRefreshGeneration) return;
             RefreshPreviewCount();
             UpdateGalleryEmptyState();
             UpdateBreadcrumb();
@@ -919,24 +1273,24 @@ namespace IconSetter
                 StringComparison.OrdinalIgnoreCase);
         }
 
-        private void Breadcrumb_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        private async void Breadcrumb_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
             if (sender is System.Windows.Controls.TextBlock tb && tb.Tag is string path)
-                PopulateExplorerLevel(path);
+                await PopulateExplorerLevelAsync(path);
         }
 
-        private void btnUpLevel_Click(object sender, RoutedEventArgs e)
+        private async void btnUpLevel_Click(object sender, RoutedEventArgs e)
         {
             string? parent = Path.GetDirectoryName(_explorerCurrent.TrimEnd(Path.DirectorySeparatorChar));
             if (parent != null && _explorerCurrent.Length > _explorerRoot.Length)
-                PopulateExplorerLevel(parent);
+                await PopulateExplorerLevelAsync(parent);
         }
 
-        private void FolderTile_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        private async void FolderTile_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
             if (!_explorerMode) return;
             if (sender is FrameworkElement fe && fe.Tag is FolderResult fr && fr.HasSubfolders)
-                PopulateExplorerLevel(fr.FolderPath);
+                await PopulateExplorerLevelAsync(fr.FolderPath);
         }
 
         private static string? ReadLocalizedNameFromDesktopIni(string folder)
@@ -983,6 +1337,7 @@ namespace IconSetter
             warningContainer.Visibility = Visibility.Collapsed;
             btnContinueToPreview.Visibility = Visibility.Collapsed;
             btnSkipImage.Visibility = Visibility.Collapsed;
+            btnSkipAllSmallImages.Visibility = Visibility.Collapsed;
             loadingWarning.Text = "";
             ResetLoadingIconPreview();
             _smallImagePrompt?.TrySetResult(true); // "convert anyway" - resumes ConvertImagesAsync's loop
@@ -993,9 +1348,22 @@ namespace IconSetter
             warningContainer.Visibility = Visibility.Collapsed;
             btnContinueToPreview.Visibility = Visibility.Collapsed;
             btnSkipImage.Visibility = Visibility.Collapsed;
+            btnSkipAllSmallImages.Visibility = Visibility.Collapsed;
             loadingWarning.Text = "";
             ResetLoadingIconPreview();
             _smallImagePrompt?.TrySetResult(false); // skip just this image - resumes the loop on the next one
+        }
+
+        private void btnSkipAllSmallImages_Click(object sender, RoutedEventArgs e)
+        {
+            warningContainer.Visibility = Visibility.Collapsed;
+            btnContinueToPreview.Visibility = Visibility.Collapsed;
+            btnSkipImage.Visibility = Visibility.Collapsed;
+            btnSkipAllSmallImages.Visibility = Visibility.Collapsed;
+            loadingWarning.Text = "";
+            ResetLoadingIconPreview();
+            _skipAllSmallImagesThisSession = true; // no more prompts for the rest of this app session
+            _smallImagePrompt?.TrySetResult(false); // skip this one too - resumes the loop on the next image
         }
 
         /// <summary>Reverts the loading overlay's image preview back to the plain spinner. Resuming
@@ -1017,6 +1385,7 @@ namespace IconSetter
             warningContainer.Visibility = Visibility.Collapsed;
             btnContinueToPreview.Visibility = Visibility.Collapsed;
             btnSkipImage.Visibility = Visibility.Collapsed;
+            btnSkipAllSmallImages.Visibility = Visibility.Collapsed;
             loadingWarning.Text = "";
             _smallImagePrompt?.TrySetResult(false); // unblock the await if a per-image prompt is pending
             ResetToOptions();
@@ -1029,7 +1398,6 @@ namespace IconSetter
             loadingCurrentIcon.Visibility = Visibility.Collapsed;
             loadingSpinner.Visibility = Visibility.Visible;
             loadingPanel.Visibility = Visibility.Collapsed;
-            _cancelRequested = false;
         }
 
         // ===================== Gallery interaction =====================
@@ -1258,7 +1626,11 @@ namespace IconSetter
             // doesn't refresh any faster through the API than through hand-writing desktop.ini;
             // both need Explorer to notice on its own, sometimes after a real delay. So new
             // folders get the API path, re-customizations get the direct-write path that's
-            // already proven to eventually catch up without restarting Explorer.
+            // already proven to eventually catch up without restarting Explorer. (Two variations
+            // of also calling the API for re-customizations were tried and reverted - neither
+            // reliably helped, and the second one coincided with new folders seeming to regress
+            // too, which points at Explorer's own notification handling being inconsistent from
+            // one test session to the next rather than anything specific to that code path.)
             bool hadDesktopIniBefore = File.Exists(desktopIni);
 
             string? localizedNameLine = null;
@@ -1446,29 +1818,50 @@ namespace IconSetter
 
         // ===================== Stats panel =====================
 
-        private void UpdateFolderStats(List<string> folders)
+        private struct FolderStatsCounts
         {
-            int withIco = 0, withNonIco = 0, withBoth = 0, withoutIcons = 0, multipleIcons = 0;
+            public int WithIco, WithNonIco, WithBoth, WithoutIcons, MultipleIcons;
+        }
+
+        /// <summary>Pure computation, safe to run on a background thread - touches only the file
+        /// system, no UI elements. Uses the shared snapshot when one's provided (the normal case,
+        /// from ScanAndBuildGalleryAsync); builds its own otherwise (the standalone quick-peek from
+        /// txtRoot_KeyDown, which doesn't have one to share).</summary>
+        private static FolderStatsCounts ComputeFolderStats(List<string> folders, Dictionary<string, FolderFileSnapshot>? snapshot = null)
+        {
+            snapshot ??= SnapshotFolders(folders);
+            var counts = new FolderStatsCounts();
 
             foreach (var folder in folders)
             {
-                var icoFiles = Directory.GetFiles(folder, "icon*.ico");
-                bool hasIco = icoFiles.Length > 0;
-                bool hasImg = FolderHasUnconvertedImage(folder);
+                if (!snapshot.TryGetValue(folder, out var fileInfo)) continue;
+                bool hasIco = fileInfo.IcoFiles.Count > 0;
+                bool hasImg = fileInfo.HasUnconvertedImage;
 
-                if (hasIco && hasImg) withBoth++;
-                else if (hasIco) withIco++;
-                else if (hasImg) withNonIco++;
-                else withoutIcons++;
+                if (hasIco && hasImg) counts.WithBoth++;
+                else if (hasIco) counts.WithIco++;
+                else if (hasImg) counts.WithNonIco++;
+                else counts.WithoutIcons++;
 
-                if (icoFiles.Length > 1) multipleIcons++;
+                if (fileInfo.IcoFiles.Count > 1) counts.MultipleIcons++;
             }
 
-            chipWithIco.Content = $"Has .ico ({withIco})";
-            chipWithNonIco.Content = $"Has \"icon\" image ({withNonIco})";
-            chipWithBoth.Content = $"Has both ({withBoth})";
-            chipWithoutIcon.Content = $"No .ico ({withoutIcons})";
-            chipMultipleIcons.Content = $"Has multiple .ico ({multipleIcons})";
+            return counts;
+        }
+
+        /// <summary>Runs the folder-stats computation on a background thread (a large tree can
+        /// mean thousands of Directory.GetFiles calls, which would otherwise freeze the UI thread
+        /// and trigger a Windows "Not Responding" prompt), then applies the results to the chips
+        /// and count text back on the UI thread.</summary>
+        private async Task UpdateFolderStatsAsync(List<string> folders, Dictionary<string, FolderFileSnapshot>? snapshot = null)
+        {
+            var counts = await Task.Run(() => ComputeFolderStats(folders, snapshot));
+
+            chipWithIco.Content = $"Has .ico ({counts.WithIco})";
+            chipWithNonIco.Content = $"Has \"icon\" image ({counts.WithNonIco})";
+            chipWithBoth.Content = $"Has both ({counts.WithBoth})";
+            chipWithoutIcon.Content = $"No .ico ({counts.WithoutIcons})";
+            chipMultipleIcons.Content = $"Has multiple .ico ({counts.MultipleIcons})";
 
             // Overwritten by RefreshFlatView/PopulateExplorerLevel once the actual scan runs -
             // this is just an immediate "you picked a folder" acknowledgment before that happens.

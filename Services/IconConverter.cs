@@ -233,7 +233,9 @@ namespace IconSetter.Services
 
             using var ms2 = new MemoryStream(data);
             var decoder = new BmpBitmapDecoder(ms2, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
-            return decoder.Frames[0];
+            var frame = decoder.Frames[0];
+            if (frame.CanFreeze) frame.Freeze();
+            return frame;
         }
     }
 }
