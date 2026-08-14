@@ -11,12 +11,12 @@ namespace IconSetter.Services
 
         /// <summary>
         /// Converts a PNG/JPG/BMP source image into a multi-resolution .ico
-        /// containing 256/128/64/48/32 px frames (16 is added by EnrichIco on demand).
+        /// containing the full standard size set: 256/128/64/48/32/16 px.
         /// </summary>
         public static void ConvertToIco(string inputPath, string outputPath)
         {
             using var src = new System.Drawing.Bitmap(inputPath);
-            WriteIco(src, outputPath, new[] { 256, 128, 64, 48, 32 });
+            WriteIco(src, outputPath, StandardSizes);
         }
 
         /// <summary>
